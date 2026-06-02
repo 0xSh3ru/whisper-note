@@ -131,7 +131,12 @@ def _check_gtk(warnings: list[str], passed: list[str]) -> None:
     except Exception:
         warnings.append(
             "GTK3 bindings not found — running in console mode (no status window).\n"
-            "     → sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0"
+            "     GTK3 is a system package; it cannot be installed via pip alone.\n"
+            "     Fix in two steps:\n"
+            "       1. sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0\n"
+            "       2. Recreate your venv with system packages:\n"
+            "            python3 -m venv --system-site-packages <venv-path>\n"
+            "            pip install whisper-note"
         )
 
 
