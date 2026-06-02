@@ -10,7 +10,7 @@ name = "whisper-note"
 version = "1.0.0"
 description = "Voice-to-markdown note taker. Hold Ctrl+Alt+Space, speak, release."
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
 requires-python = ">=3.10"
 keywords = [
     "whisper", "voice", "speech-to-text", "transcription",
@@ -21,7 +21,6 @@ classifiers = [
     "Environment :: X11 Applications :: GTK",
     "Intended Audience :: End Users/Desktop",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -37,6 +36,7 @@ classifiers = [
 dependencies = [
     "faster-whisper>=1.0",
     "openai>=1.0",
+    "httpx>=0.25",
     "sounddevice>=0.4",
     "soundfile>=0.12",
     "numpy>=1.24",
@@ -59,12 +59,12 @@ dev = [
 whisper-note = "whisper_note.cli:main"
 
 # ---------------------------------------------------------------------------
-# URLs  — update YOUR_USERNAME before publishing
+# URLs  — update 0xSh3ru before publishing
 # ---------------------------------------------------------------------------
 [project.urls]
-Homepage      = "https://github.com/YOUR_USERNAME/whisper-note"
-"Bug Tracker" = "https://github.com/YOUR_USERNAME/whisper-note/issues"
-Changelog     = "https://github.com/YOUR_USERNAME/whisper-note/blob/main/CHANGELOG.md"
+Homepage      = "https://github.com/0xSh3ru/whisper-note"
+"Bug Tracker" = "https://github.com/0xSh3ru/whisper-note/issues"
+Changelog     = "https://github.com/0xSh3ru/whisper-note/blob/main/CHANGELOG.md"
 
 # ---------------------------------------------------------------------------
 # Package discovery — src layout
