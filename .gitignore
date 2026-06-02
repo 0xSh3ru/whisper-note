@@ -1,0 +1,49 @@
+# Python build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+*.whl
+
+# Virtual environments (if created inside the project)
+.venv/
+venv/
+env/
+
+# Secrets — never commit
+.env
+.env.*
+*.key
+*.pem
+
+# Model cache (large binary files — download at runtime)
+.cache/
+models/
+
+# Runtime log files
+logs/
+*.log
+
+# Test cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# GTK venv shim (generated during setup — not source)
+system-gi.pth
