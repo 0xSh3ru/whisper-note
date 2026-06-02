@@ -34,6 +34,7 @@
 - [Output structure](#output-structure)
 - [Troubleshooting](#troubleshooting)
 - [Developer guide](#developer-guide)
+- [Changelog](#changelog)
 - [License](#license)
 
 ---
@@ -87,6 +88,16 @@ The installer will ask you:
 | LLM API key | *(hidden)* | Leave blank for local Ollama |
 | LLM model name | `qwen3:4b` | Model to use for formatting |
 | Request timeout | `300` | Seconds (increase for slow CPU inference) |
+
+> **Note on backends:** the installer configures the **HTTP** formatter backend
+> (Ollama / OpenAI / Claude) and pins `WN_LLM_BACKEND=http`. To use the default
+> **local** llama.cpp/GGUF backend instead, install the extra and switch the key:
+> ```bash
+> ~/.local/share/whisper-note/venv/bin/pip install "whisper-note[local]"
+> whisper-note config set WN_LLM_BACKEND=local
+> whisper-note config set WN_LLM_GGUF=/path/to/model.gguf
+> systemctl --user restart whisper-note
+> ```
 
 After the installer completes, the widget appears in the top-right corner of your screen and the service starts automatically on every login.
 
@@ -480,12 +491,20 @@ main.main()
 
 ### Releasing a new version
 
-1. Bump `version` in `pyproject.toml`
-2. Commit: `git commit -m "Bump version to X.Y.Z"`
-3. Build: `python -m build`
-4. Upload to TestPyPI: `twine upload --repository-url https://test.pypi.org/legacy/ dist/*`
-5. Verify: `pip install --index-url https://test.pypi.org/simple/ whisper-note==X.Y.Z`
+1. Bump `version` in `pyproject.toml` and add an entry to [CHANGELOG.md](CHANGELOG.md)
+2. Commit and tag: `git commit -am "Bump version to X.Y.Z" && git tag -a vX.Y.Z -m "X.Y.Z"`
+3. Build: `rm -f dist/* && python -m build`
+4. Check + upload to TestPyPI: `twine check dist/* && twine upload --repository testpypi dist/*`
+5. Verify: `pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ "whisper-note[local]==X.Y.Z"`
 6. Upload to PyPI: `twine upload dist/*`
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the full history. Latest: **1.1.0** — adds the
+default local llama.cpp/GGUF formatter backend and makes the formatter backends
+optional pip extras (`[local]` / `[http]`).
 
 ---
 
