@@ -92,10 +92,10 @@ mkdir -p "$INSTALL_DIR"
 python3 -m venv --system-site-packages "$VENV_DIR"
 ok "Virtual environment created."
 
-info "Installing whisper-note…"
+info "Installing whisper-note from PyPI…"
 "$VENV_DIR/bin/pip" install --quiet --upgrade pip
-"$VENV_DIR/bin/pip" install --quiet -e "$SCRIPT_DIR"
-ok "whisper-note installed."
+"$VENV_DIR/bin/pip" install --quiet whisper-note
+ok "whisper-note installed ($(\"$VENV_DIR/bin/whisper-note\" --version))."
 
 # ── Environment file ──────────────────────────────────────────────────────────
 info "Writing environment file to ${ENV_FILE}…"
@@ -129,7 +129,7 @@ mkdir -p "$SERVICE_DIR"
 cat > "$SERVICE_FILE" << SVCEOF
 [Unit]
 Description=Whisper Note — voice-to-markdown note taker
-Documentation=https://github.com/YOUR_USERNAME/whisper-note
+Documentation=https://github.com/0xSh3ru/whisper-note
 After=graphical-session.target
 PartOf=graphical-session.target
 
