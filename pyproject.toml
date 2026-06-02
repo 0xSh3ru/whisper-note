@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 # ---------------------------------------------------------------------------
 [project]
 name = "whisper-note"
-version = "1.0.4"
+version = "1.1.0"
 description = "Voice-to-markdown note taker. Hold Ctrl+Alt+Space, speak, release."
 readme = "README.md"
 license = "MIT"
@@ -35,8 +35,6 @@ classifiers = [
 # See README — Installation for the apt command.
 dependencies = [
     "faster-whisper>=1.0",
-    "openai>=1.0",
-    "httpx>=0.25",
     "sounddevice>=0.4",
     "soundfile>=0.12",
     "numpy>=1.24",
@@ -44,6 +42,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Formatter backends — install the one matching WN_LLM_BACKEND.
+# Local backend (default): in-process llama.cpp loading a GGUF model.
+#   pip install "whisper-note[local]"
+local = [
+    "llama-cpp-python>=0.2",
+]
+# HTTP backend: OpenAI-compatible endpoint (Ollama / OpenAI / Claude).
+#   pip install "whisper-note[http]"
+http = [
+    "openai>=1.0",
+    "httpx>=0.25",
+]
 dev = [
     "pytest>=8",
     "ruff>=0.4",

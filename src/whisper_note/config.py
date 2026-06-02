@@ -49,8 +49,12 @@ class Config:
     # Named model (tiny/base/small/medium/large-v3) → auto-downloaded on first
     # use and cached in ~/.cache/huggingface/hub/.
     # Absolute or relative path → uses a local model directory directly.
+    # Default is the local faster-whisper-small directory (on-device, no download).
     whisper_model: str = field(
-        default_factory=lambda: os.environ.get("WHISPER_MODEL", "base")
+        default_factory=lambda: os.environ.get(
+            "WHISPER_MODEL",
+            str(Path("~/models/faster-whisper-small").expanduser()),
+        )
     )
     whisper_compute_type: str = field(
         default_factory=lambda: os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
@@ -60,7 +64,39 @@ class Config:
     # ── Audio ─────────────────────────────────────────────────────────────────
     sample_rate: int = 16000
 
-    # ── LLM formatter (OpenAI-compatible — works with Ollama, OpenAI, Claude) ──
+    # ── LLM formatter ──────────────────────────────────────────────────────────
+    # Two backends:
+    #   "local" (default) → in-process llama.cpp loading a local GGUF file.
+    #                        Fully on-device, no server required.  See llm_gguf_path.
+    #   "http"            → OpenAI-compatible endpoint (Ollama / OpenAI / Claude).
+    #                        Configured via llm_url + llm_key + llm_model.
+    llm_backend: str = field(
+        default_factory=lambda: os.environ.get("WN_LLM_BACKEND", "local").strip().lower()
+    )
+
+    # ── Local backend (llama.cpp + GGUF) ───────────────────────────────────────
+    llm_gguf_path: Path = field(
+        default_factory=lambda: Path(
+            os.environ.get(
+                "WN_LLM_GGUF",
+                "~/models/qwen/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+            )
+        ).expanduser()
+    )
+    llm_n_ctx: int = field(
+        default_factory=lambda: int(os.environ.get("WN_LLM_N_CTX", "8192"))
+    )
+    llm_n_threads: int = field(
+        default_factory=lambda: int(os.environ.get("WN_LLM_THREADS", "4"))
+    )
+    llm_max_tokens: int = field(
+        default_factory=lambda: int(os.environ.get("WN_LLM_MAX_TOKENS", "2048"))
+    )
+    llm_temperature: float = field(
+        default_factory=lambda: float(os.environ.get("WN_LLM_TEMPERATURE", "0.2"))
+    )
+
+    # ── HTTP backend (OpenAI-compatible — Ollama, OpenAI, Claude) ──────────────
     # Switch provider by changing WN_LLM_URL + WN_LLM_KEY + WN_LLM_MODEL.
     # No code changes needed — all three speak the same API.
     llm_url: str = field(

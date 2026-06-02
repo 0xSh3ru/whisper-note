@@ -18,6 +18,15 @@ ENV_FILE = ENV_DIR / "env"
 ALLOWED_KEYS = {
     "WHISPER_MODEL",
     "WHISPER_COMPUTE_TYPE",
+    # LLM backend selector
+    "WN_LLM_BACKEND",
+    # Local backend (llama.cpp + GGUF)
+    "WN_LLM_GGUF",
+    "WN_LLM_N_CTX",
+    "WN_LLM_THREADS",
+    "WN_LLM_MAX_TOKENS",
+    "WN_LLM_TEMPERATURE",
+    # HTTP backend (OpenAI-compatible)
     "WN_LLM_URL",
     "WN_LLM_KEY",
     "WN_LLM_MODEL",

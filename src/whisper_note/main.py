@@ -16,6 +16,7 @@ from datetime import datetime
 
 from pynput import keyboard as kb
 
+from whisper_note import formatter as formatter_mod
 from whisper_note import storage
 from whisper_note import transcriber as transcriber_mod
 from whisper_note.formatter import format_transcript
@@ -168,10 +169,14 @@ def main() -> None:
     logger.info(f"Log     : {SESSION_LOG}")
     logger.info(f"Notes   : {cfg.voice_notes_dir}")
     logger.info(f"Model   : {cfg.whisper_model}  ({cfg.whisper_compute_type})")
-    logger.info(f"LLM     : {cfg.llm_model}  →  {cfg.llm_url}")
+    if cfg.llm_backend == "local":
+        logger.info(f"LLM     : local GGUF  →  {cfg.llm_gguf_path}")
+    else:
+        logger.info(f"LLM     : {cfg.llm_model}  →  {cfg.llm_url}  (http)")
 
     storage.ensure_directories()
     transcriber_mod.load_model()
+    formatter_mod.load_model()  # no-op unless the local backend is selected
 
     logger.info("Ready — Hold Ctrl+Alt+Space to record | Release to process | Esc to quit")
     logger.info("=" * 60)

@@ -1,10 +1,12 @@
 """
-Transcript formatter — single OpenAI-compatible code path.
+Transcript formatter — two backends, selected by cfg.llm_backend.
 
-Works with any provider that speaks the OpenAI chat completions API:
-  Ollama  → WN_LLM_URL=http://127.0.0.1:11434/v1  WN_LLM_KEY=ollama
-  OpenAI  → WN_LLM_URL=https://api.openai.com/v1   WN_LLM_KEY=sk-...
-  Claude  → WN_LLM_URL=https://api.anthropic.com/v1 WN_LLM_KEY=sk-ant-...
+  "local" (default) — in-process llama.cpp loading a local GGUF model.
+                      Fully on-device, no server.  Model loaded once at startup.
+  "http"            — any OpenAI-compatible chat completions endpoint:
+                        Ollama  → WN_LLM_URL=http://127.0.0.1:11434/v1  WN_LLM_KEY=ollama
+                        OpenAI  → WN_LLM_URL=https://api.openai.com/v1   WN_LLM_KEY=sk-...
+                        Claude  → WN_LLM_URL=https://api.anthropic.com/v1 WN_LLM_KEY=sk-ant-...
 
 Falls back to a raw-transcript note if the LLM is unavailable.
 """
@@ -14,8 +16,15 @@ import logging
 import re
 import textwrap
 from datetime import datetime
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from llama_cpp import Llama
 
 logger = logging.getLogger("whisper.formatter")
+
+# Local llama.cpp model — loaded once via load_model() to avoid per-note overhead.
+_local_llm: Optional["Llama"] = None
 
 # ---------------------------------------------------------------------------
 # Prompt
@@ -62,6 +71,39 @@ _USER_PROMPT = "Format this voice transcript as a markdown note:\n\n{transcript}
 
 
 # ---------------------------------------------------------------------------
+# Local backend model loading (llama.cpp + GGUF)
+# ---------------------------------------------------------------------------
+
+def load_model() -> None:
+    """
+    Load the local GGUF model into memory.  Optional but recommended: call once
+    at startup (see main.py) so the first note isn't slowed by model loading.
+    No-op unless the local backend is selected.  Never raises — a failure here
+    leaves the model unloaded and format_transcript() falls back to raw notes.
+    """
+    global _local_llm
+    from whisper_note import config as cfg_mod
+    cfg = cfg_mod.get()
+
+    if cfg.llm_backend != "local" or _local_llm is not None:
+        return
+
+    try:
+        from llama_cpp import Llama
+        logger.info(f"Loading local LLM (GGUF): {cfg.llm_gguf_path}")
+        _local_llm = Llama(
+            model_path=str(cfg.llm_gguf_path),
+            n_ctx=cfg.llm_n_ctx,
+            n_threads=cfg.llm_n_threads,
+            verbose=False,
+        )
+        logger.info("Local LLM ready.")
+    except Exception as exc:
+        logger.error(f"Failed to load local LLM ({cfg.llm_gguf_path}): {exc}")
+        _local_llm = None
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -70,7 +112,11 @@ def format_transcript(transcript: str, timestamp: str) -> str:
     from whisper_note import config as cfg_mod
     cfg = cfg_mod.get()
 
-    result = _try_llm(transcript, cfg)
+    if cfg.llm_backend == "local":
+        result = _try_local_llm(transcript, cfg)
+    else:
+        result = _try_http_llm(transcript, cfg)
+
     if result:
         return result
 
@@ -78,11 +124,70 @@ def format_transcript(transcript: str, timestamp: str) -> str:
     return _fallback_markdown(transcript, timestamp, reason="LLM unavailable")
 
 
+def _clean(text: str) -> str:
+    """
+    Normalise raw model output into a clean markdown note:
+      - drop any <think>…</think> reasoning blocks
+      - unwrap a whole-document ```markdown … ``` fence that smaller models
+        sometimes add despite being told to return only markdown content
+    """
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+    # Unwrap an outer ```markdown / ```md fence wrapping the entire response.
+    m = re.match(r"^```(?:markdown|md)\s*\n(.*)", text, flags=re.DOTALL | re.IGNORECASE)
+    if m:
+        text = m.group(1)
+        text = re.sub(r"\n?```\s*$", "", text)  # drop the matching closing fence, if present
+
+    return text.strip()
+
+
 # ---------------------------------------------------------------------------
-# Generic LLM call (OpenAI-compatible)
+# Local backend — in-process llama.cpp (GGUF), ChatML prompt
 # ---------------------------------------------------------------------------
 
-def _try_llm(transcript: str, cfg) -> str | None:
+def _try_local_llm(transcript: str, cfg) -> str | None:
+    global _local_llm
+    if _local_llm is None:
+        load_model()  # lazy load if startup didn't
+    if _local_llm is None:
+        return None
+
+    logger.info(f"Formatting via local GGUF: {cfg.llm_gguf_path.name}")
+    prompt = (
+        "<|im_start|>system\n"
+        f"{_SYSTEM_PROMPT}<|im_end|>\n"
+        "<|im_start|>user\n"
+        f"{_USER_PROMPT.format(transcript=transcript)}<|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )
+
+    try:
+        response = _local_llm(
+            prompt,
+            max_tokens=cfg.llm_max_tokens,
+            temperature=cfg.llm_temperature,
+            top_p=0.9,
+            repeat_penalty=1.1,
+            stop=["<|im_end|>", "<|im_start|>"],
+        )
+    except Exception as exc:
+        logger.error(f"Local LLM formatting failed: {exc}")
+        return None
+
+    text = _clean(response["choices"][0]["text"] or "")
+    if not text:
+        logger.warning("Local LLM returned empty content.")
+        return None
+    logger.info(f"Local LLM returned {len(text)} chars.")
+    return text
+
+
+# ---------------------------------------------------------------------------
+# HTTP backend — OpenAI-compatible endpoint
+# ---------------------------------------------------------------------------
+
+def _try_http_llm(transcript: str, cfg) -> str | None:
     import time
     import httpx
     from openai import OpenAI, RateLimitError
@@ -111,8 +216,7 @@ def _try_llm(transcript: str, cfg) -> str | None:
                 {"role": "user",   "content": _USER_PROMPT.format(transcript=transcript)},
             ],
         )
-        text = completion.choices[0].message.content or ""
-        return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        return _clean(completion.choices[0].message.content or "")
 
     try:
         text = _call()

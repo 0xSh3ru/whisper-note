@@ -10,7 +10,7 @@
 **whisper-note** is an Ubuntu desktop tool that turns spoken voice into clean, structured markdown notes:
 
 - **Local transcription** via [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — no cloud, no latency
-- **AI formatting** via any OpenAI-compatible LLM — Ollama (local), OpenAI, or Claude
+- **Local AI formatting** via [llama.cpp](https://github.com/abetlen/llama-cpp-python) running a GGUF model in-process (default) — fully on-device, no server. Optionally switch to any OpenAI-compatible HTTP endpoint (Ollama, OpenAI, Claude).
 - **Always-on-top widget** — shows live status with a colour-coded accent bar
 - **Runs as a systemd user service** — starts automatically on login
 - **Reliability first** — raw transcript is saved before any AI call; failed audio is preserved
@@ -47,7 +47,7 @@ Release any key      →  Widget turns AMBER →  Processing:
                           1. Audio written to temp WAV
                           2. Whisper transcribes locally (offline)
                           3. Raw transcript saved to raw/
-                          4. LLM formats it into clean markdown
+                          4. Local LLM formats it into clean markdown
                           5. Markdown note saved
                           6. Temp WAV deleted
 Widget turns GREEN   →  Note saved  →  Returns to IDLE after a few seconds
@@ -104,20 +104,25 @@ sudo apt install \
     portaudio19-dev libsndfile1
 ```
 
-**Install** (venv must use `--system-site-packages` for GTK3):
+**Install** (venv must use `--system-site-packages` for GTK3). Pick a formatter backend extra — `local` (default) or `http`:
 
 ```bash
 python3 -m venv --system-site-packages .venv
-.venv/bin/pip install whisper-note
+
+# Local backend (default — in-process llama.cpp + GGUF):
+.venv/bin/pip install "whisper-note[local]"
+
+# …or HTTP backend (Ollama / OpenAI / Claude):
+.venv/bin/pip install "whisper-note[http]"
 ```
 
 **Run:**
 
 ```bash
+# Local backend (default): point at a downloaded GGUF model
 DISPLAY=:0 GDK_BACKEND=x11 \
-  WN_LLM_URL=http://127.0.0.1:11434/v1 \
-  WN_LLM_MODEL=qwen3:4b \
-  WHISPER_MODEL=base \
+  WN_LLM_GGUF=~/models/qwen/qwen2.5-1.5b-instruct-q4_k_m.gguf \
+  WHISPER_MODEL=~/models/faster-whisper-small \
   .venv/bin/whisper-note
 ```
 
@@ -127,7 +132,8 @@ DISPLAY=:0 GDK_BACKEND=x11 \
 git clone https://github.com/0xSh3ru/whisper-note.git
 cd whisper-note
 python3 -m venv --system-site-packages .venv
-.venv/bin/pip install -e ".[dev]"
+# dev tooling + both formatter backends
+.venv/bin/pip install -e ".[dev,local,http]"
 ```
 
 > **Why `--system-site-packages`?**  
@@ -146,7 +152,7 @@ All settings are driven by environment variables. When installed via `install.sh
 
 | Variable | Default | Description |
 |---|---|---|
-| `WHISPER_MODEL` | `base` | Model name (`tiny`/`base`/`small`/`medium`/`large-v3`) or path to local model |
+| `WHISPER_MODEL` | `~/models/faster-whisper-small` | Path to a local model directory, or a named model (`tiny`/`base`/`small`/`medium`/`large-v3`) auto-downloaded from HuggingFace Hub |
 | `WHISPER_COMPUTE_TYPE` | `int8` | Inference precision: `int8` / `float16` / `float32` |
 
 #### Notes output
@@ -158,7 +164,23 @@ All settings are driven by environment variables. When installed via `install.sh
 
 #### LLM formatter
 
-Works with any OpenAI-compatible API endpoint — Ollama, OpenAI, and Claude are all supported with the same variables.
+The formatter has two backends, selected by `WN_LLM_BACKEND`:
+
+| Variable | Default | Description |
+|---|---|---|
+| `WN_LLM_BACKEND` | `local` | `local` = in-process llama.cpp/GGUF (on-device, no server); `http` = OpenAI-compatible endpoint |
+
+**Local backend** (default — fully on-device via [llama-cpp-python](https://github.com/abetlen/llama-cpp-python)):
+
+| Variable | Default | Description |
+|---|---|---|
+| `WN_LLM_GGUF` | `~/models/qwen/qwen2.5-1.5b-instruct-q4_k_m.gguf` | Path to the GGUF model file |
+| `WN_LLM_N_CTX` | `8192` | Context window size |
+| `WN_LLM_THREADS` | `4` | CPU threads |
+| `WN_LLM_MAX_TOKENS` | `2048` | Max output tokens |
+| `WN_LLM_TEMPERATURE` | `0.2` | Sampling temperature |
+
+**HTTP backend** (`WN_LLM_BACKEND=http` — works with Ollama, OpenAI, Claude; requires the extra: `pip install "whisper-note[http]"`):
 
 | Variable | Default | Description |
 |---|---|---|
@@ -183,15 +205,18 @@ Use the built-in CLI subcommand — no need to edit files manually:
 # Show current configuration
 whisper-note config show
 
-# Change the LLM model
-whisper-note config set WN_LLM_MODEL=gpt-4o-mini
+# Point the local backend at a different GGUF model
+whisper-note config set WN_LLM_GGUF=~/models/qwen/qwen2.5-1.5b-instruct-q4_k_m.gguf
 
-# Switch to OpenAI
+# Switch to the HTTP backend (requires: pip install "whisper-note[http]")
+whisper-note config set WN_LLM_BACKEND=http
+
+# ...then OpenAI
 whisper-note config set WN_LLM_URL=https://api.openai.com/v1
 whisper-note config set WN_LLM_KEY=sk-...
 whisper-note config set WN_LLM_MODEL=gpt-4o-mini
 
-# Switch to Claude
+# ...or Claude
 whisper-note config set WN_LLM_URL=https://api.anthropic.com/v1
 whisper-note config set WN_LLM_KEY=sk-ant-...
 whisper-note config set WN_LLM_MODEL=claude-haiku-4-5-20251001
@@ -214,8 +239,8 @@ Models are downloaded on first use and cached in `~/.cache/huggingface/hub/`.
 | Model | Download | Speed | Accuracy | Recommended for |
 |---|---|---|---|---|
 | `tiny` | ~39 MB | Fastest | Basic | Testing / weak hardware |
-| `base` | ~74 MB | Fast | Good | **Default — daily use** |
-| `small` | ~244 MB | Moderate | Better | Higher accuracy |
+| `base` | ~74 MB | Fast | Good | Daily use |
+| `small` | ~244 MB | Moderate | Better | **Default — higher accuracy** |
 | `medium` | ~769 MB | Slow | High | Technical content |
 | `large-v3` | ~1.5 GB | Slowest | Best | Maximum accuracy |
 
@@ -223,10 +248,19 @@ Models are downloaded on first use and cached in `~/.cache/huggingface/hub/`.
 
 ### LLM providers
 
-All three providers use the same four `WN_LLM_*` variables:
+**Local backend (default)** — a GGUF model run in-process by llama.cpp, no server:
 
 ```bash
-# Ollama (local — default)
+WN_LLM_BACKEND=local
+WN_LLM_GGUF=~/models/qwen/qwen2.5-1.5b-instruct-q4_k_m.gguf
+```
+
+Download any instruction-tuned GGUF (e.g. a Qwen2.5-Instruct quant from HuggingFace) and point `WN_LLM_GGUF` at it.
+
+**HTTP backend** — set `WN_LLM_BACKEND=http` (requires the extra: `pip install "whisper-note[http]"`). All three providers share the same `WN_LLM_*` variables:
+
+```bash
+# Ollama (local server)
 WN_LLM_URL=http://127.0.0.1:11434/v1
 WN_LLM_KEY=ollama
 WN_LLM_MODEL=qwen3:4b
@@ -323,7 +357,7 @@ sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0
 
 # Recreate venv with system package access
 python3 -m venv --system-site-packages .venv
-.venv/bin/pip install whisper-note
+.venv/bin/pip install "whisper-note[local]"
 ```
 
 ### Hotkey not triggering recording
@@ -336,17 +370,19 @@ DISPLAY=:0 GDK_BACKEND=x11 whisper-note
 
 The service file set by `install.sh` includes this automatically.
 
-### LLM formatting times out
+### Local LLM formatting is slow
 
-Ollama running on CPU (no GPU) is slow. Increase the timeout:
+The local backend runs on CPU. Use a smaller/more-quantized GGUF model, lower
+`WN_LLM_MAX_TOKENS`, or raise `WN_LLM_THREADS` to match your core count:
 
 ```bash
-whisper-note config set WN_LLM_TIMEOUT=600
+whisper-note config set WN_LLM_THREADS=8
 ```
 
-Or switch to a faster cloud provider:
+Or switch to the HTTP backend and a faster cloud provider (requires `pip install "whisper-note[http]"`):
 
 ```bash
+whisper-note config set WN_LLM_BACKEND=http
 whisper-note config set WN_LLM_URL=https://api.openai.com/v1
 whisper-note config set WN_LLM_KEY=sk-...
 whisper-note config set WN_LLM_MODEL=gpt-4o-mini
@@ -391,7 +427,7 @@ src/whisper_note/
 ├── storage.py         Atomic file writes, directory management
 ├── recorder.py        Thread-safe sounddevice audio capture
 ├── transcriber.py     faster-whisper wrapper (loaded once at startup)
-├── formatter.py       Generic LLM formatter (OpenAI-compatible) + raw fallback
+├── formatter.py       LLM formatter — local llama.cpp/GGUF (default) or HTTP + raw fallback
 ├── indicator.py       GTK3 floating status widget (console fallback if absent)
 └── main.py            Orchestration — hotkey listener + pipeline threads
 ```
@@ -416,7 +452,7 @@ main.main()
   └── Pipeline thread (per recording)
         ├── Whisper transcribe (local)
         ├── Save raw transcript
-        ├── LLM format (generic OpenAI-compatible client)
+        ├── LLM format (local llama.cpp/GGUF by default, or HTTP backend)
         └── Save markdown note
 ```
 

@@ -31,9 +31,12 @@ _KNOWN_MODELS = frozenset({
     "distil-large-v2", "distil-medium.en", "distil-small.en",
 })
 
+# Core packages needed regardless of LLM backend.  The formatter backend
+# package (llama-cpp-python or openai) is an optional extra and is checked
+# non-fatally by _check_llm — a missing backend still lets the app transcribe
+# and save raw notes ("speech never lost").
 _REQUIRED_PACKAGES = {
     "faster_whisper": "faster-whisper",
-    "openai":         "openai",
     "sounddevice":    "sounddevice",
     "soundfile":      "soundfile",
     "numpy":          "numpy",
@@ -231,6 +234,40 @@ def _check_log_dir(cfg: Config, warnings: list[str], passed: list[str]) -> None:
 
 def _check_llm(cfg: Config, llm_errors: list[str], passed: list[str]) -> None:
     """
+    Verify the selected LLM backend is usable.
+    Non-fatal: app continues and saves raw transcripts if the LLM is unavailable.
+    """
+    if cfg.llm_backend == "local":
+        _check_local_llm(cfg, llm_errors, passed)
+    else:
+        _check_http_llm(cfg, llm_errors, passed)
+
+
+def _check_local_llm(cfg: Config, llm_errors: list[str], passed: list[str]) -> None:
+    """Verify llama-cpp-python is importable and the GGUF model file exists."""
+    try:
+        import llama_cpp  # noqa: F401
+    except ImportError:
+        llm_errors.append(
+            "llama-cpp-python not installed (required for the local LLM backend).\n"
+            "     → pip install \"whisper-note[local]\"\n"
+            "     → or switch backend: whisper-note config set WN_LLM_BACKEND=http"
+        )
+        return
+
+    if cfg.llm_gguf_path.is_file():
+        size_gb = cfg.llm_gguf_path.stat().st_size / (1024 ** 3)
+        passed.append(f"Local LLM ready: {cfg.llm_gguf_path}  ({size_gb:.1f} GB)")
+    else:
+        llm_errors.append(
+            f"Local LLM model not found: {cfg.llm_gguf_path}\n"
+            "     → Download a GGUF model and point WN_LLM_GGUF at it, e.g.\n"
+            "       whisper-note config set WN_LLM_GGUF=/path/to/model.gguf"
+        )
+
+
+def _check_http_llm(cfg: Config, llm_errors: list[str], passed: list[str]) -> None:
+    """
     Verify the configured LLM endpoint is reachable and the key is accepted.
     Uses client.models.list() — a lightweight GET with no token generation.
     Non-fatal: app continues and saves raw transcripts if LLM is unavailable.
@@ -238,7 +275,15 @@ def _check_llm(cfg: Config, llm_errors: list[str], passed: list[str]) -> None:
     try:
         import httpx
         from openai import OpenAI, AuthenticationError, APIConnectionError
+    except ImportError:
+        llm_errors.append(
+            "openai / httpx not installed (required for the http LLM backend).\n"
+            "     → pip install \"whisper-note[http]\"\n"
+            "     → or switch backend: whisper-note config set WN_LLM_BACKEND=local"
+        )
+        return
 
+    try:
         client = OpenAI(
             base_url=cfg.llm_url,
             api_key=cfg.llm_key,
