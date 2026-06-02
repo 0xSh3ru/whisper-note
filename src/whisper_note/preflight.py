@@ -59,7 +59,7 @@ def run_checks(cfg: Config) -> None:
 
     _check_python_version(errors)
     _check_required_packages(errors, passed)
-    _check_gtk(warnings, passed)
+    _check_gtk(errors, passed)
     _check_audio_device(errors, passed)
     _check_whisper_model(cfg, errors, warnings, passed)
     _check_notes_dir(cfg, errors, passed)
@@ -122,21 +122,21 @@ def _check_required_packages(errors: list[str], passed: list[str]) -> None:
         passed.append("All required Python packages present")
 
 
-def _check_gtk(warnings: list[str], passed: list[str]) -> None:
+def _check_gtk(errors: list[str], passed: list[str]) -> None:
     try:
         import gi
         gi.require_version("Gtk", "3.0")
         from gi.repository import Gtk  # noqa: F401
         passed.append("GTK3 bindings present (status window enabled)")
     except Exception:
-        warnings.append(
-            "GTK3 bindings not found — running in console mode (no status window).\n"
-            "     GTK3 is a system package; it cannot be installed via pip alone.\n"
-            "     Fix in two steps:\n"
-            "       1. sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0\n"
-            "       2. Recreate your venv with system packages:\n"
-            "            python3 -m venv --system-site-packages <venv-path>\n"
-            "            pip install whisper-note"
+        errors.append(
+            "GTK3 bindings not found — cannot start without the status window.\n"
+            "     python3-gi is a system package that pip cannot install alone.\n\n"
+            "     Fix:\n"
+            "       sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0\n\n"
+            "     Then recreate your venv so it can see the system package:\n"
+            "       python3 -m venv --system-site-packages <your-venv>\n"
+            "       <your-venv>/bin/pip install whisper-note"
         )
 
 
