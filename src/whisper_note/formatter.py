@@ -1,23 +1,27 @@
 """
-OpenAI transcript formatter with a reliability-first fallback.
+Transcript formatter — single OpenAI-compatible code path.
 
-Design contract:
-  format_transcript() ALWAYS returns a valid markdown string.
-  If OpenAI is unavailable or fails, the raw transcript is wrapped in a
-  minimal markdown note so no captured speech is ever discarded.
+Works with any provider that speaks the OpenAI chat completions API:
+  Ollama  → WN_LLM_URL=http://127.0.0.1:11434/v1  WN_LLM_KEY=ollama
+  OpenAI  → WN_LLM_URL=https://api.openai.com/v1   WN_LLM_KEY=sk-...
+  Claude  → WN_LLM_URL=https://api.anthropic.com/v1 WN_LLM_KEY=sk-ant-...
+
+Falls back to a raw-transcript note if the LLM is unavailable.
 """
 from __future__ import annotations
 
 import logging
+import re
 import textwrap
 from datetime import datetime
 
 logger = logging.getLogger("whisper.formatter")
 
 # ---------------------------------------------------------------------------
-# Prompt — tuned for technical research notes
+# Prompt
 # ---------------------------------------------------------------------------
 _SYSTEM_PROMPT = """\
+/no_think
 You are a precise technical note formatter that converts voice transcripts \
 into well-structured Obsidian markdown notes.
 
@@ -54,49 +58,85 @@ or "improve" them:
 Return only the markdown content. No preamble, no trailing explanation.
 """
 
-
-def format_transcript(transcript: str, timestamp: str) -> str:
-    """
-    Format transcript via OpenAI.
-    Falls back to _fallback_markdown() on any failure so content is never lost.
-    """
-    from whisper_note import config as cfg_mod
-    cfg = cfg_mod.get()
-
-    if not cfg.openai_api_key:
-        logger.warning(
-            "OPENAI_API_KEY not set — using fallback formatter. "
-            "Export the variable to enable AI formatting."
-        )
-        return _fallback_markdown(transcript, timestamp, reason="OPENAI_API_KEY not set")
-
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=cfg.openai_api_key, timeout=cfg.openai_timeout)
-        logger.info(f"Sending to OpenAI ({cfg.openai_model}) ...")
-
-        completion = client.chat.completions.create(
-            model=cfg.openai_model,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": f"Format this voice transcript as a markdown note:\n\n{transcript}",
-                },
-            ],
-        )
-        markdown = completion.choices[0].message.content
-        logger.info(f"OpenAI returned {len(markdown)} chars.")
-        return markdown
-
-    except Exception as exc:
-        logger.error(f"OpenAI formatting failed: {exc}")
-        logger.warning("Falling back to raw-transcript markdown to preserve content.")
-        return _fallback_markdown(transcript, timestamp, reason=str(exc))
+_USER_PROMPT = "Format this voice transcript as a markdown note:\n\n{transcript}"
 
 
 # ---------------------------------------------------------------------------
-# Fallback — always produces a valid note
+# Public entry point
+# ---------------------------------------------------------------------------
+
+def format_transcript(transcript: str, timestamp: str) -> str:
+    """Always returns valid markdown. Never raises."""
+    from whisper_note import config as cfg_mod
+    cfg = cfg_mod.get()
+
+    result = _try_llm(transcript, cfg)
+    if result:
+        return result
+
+    logger.warning("LLM unavailable — saving raw transcript.")
+    return _fallback_markdown(transcript, timestamp, reason="LLM unavailable")
+
+
+# ---------------------------------------------------------------------------
+# Generic LLM call (OpenAI-compatible)
+# ---------------------------------------------------------------------------
+
+def _try_llm(transcript: str, cfg) -> str | None:
+    import time
+    import httpx
+    from openai import OpenAI, RateLimitError
+
+    logger.info(f"Formatting via {cfg.llm_url}  model={cfg.llm_model}")
+    client = OpenAI(
+        base_url=cfg.llm_url,
+        api_key=cfg.llm_key,
+        max_retries=0,
+        default_headers={"anthropic-version": "2023-06-01"},
+        http_client=httpx.Client(
+            timeout=httpx.Timeout(
+                connect=10.0,
+                read=float(cfg.llm_timeout),
+                write=10.0,
+                pool=10.0,
+            )
+        ),
+    )
+
+    def _call() -> str:
+        completion = client.chat.completions.create(
+            model=cfg.llm_model,
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user",   "content": _USER_PROMPT.format(transcript=transcript)},
+            ],
+        )
+        text = completion.choices[0].message.content or ""
+        return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+    try:
+        text = _call()
+    except RateLimitError:
+        logger.warning("Rate limit hit — retrying in 10 s …")
+        time.sleep(10)
+        try:
+            text = _call()
+        except Exception as exc:
+            logger.error(f"LLM formatting failed after retry: {exc}")
+            return None
+    except Exception as exc:
+        logger.error(f"LLM formatting failed: {exc}")
+        return None
+
+    if not text:
+        logger.warning("LLM returned empty content.")
+        return None
+    logger.info(f"LLM returned {len(text)} chars.")
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Raw fallback — always produces a valid note
 # ---------------------------------------------------------------------------
 
 def _fallback_markdown(transcript: str, timestamp: str, reason: str = "") -> str:

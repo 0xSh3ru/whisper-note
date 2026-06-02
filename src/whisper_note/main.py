@@ -34,10 +34,11 @@ logger = logging.getLogger("whisper.main")
 
 # Singletons
 indicator = StatusIndicator()
-recorder = Recorder()
+recorder  = Recorder()
 
 # Keyboard state — only mutated from the pynput thread
 _ctrl_held = False
+_alt_held  = False
 
 
 # ---------------------------------------------------------------------------
@@ -45,33 +46,22 @@ _ctrl_held = False
 # ---------------------------------------------------------------------------
 
 def _run_pipeline(audio_np) -> None:
-    """
-    Full lifecycle for one recording.  Runs in a daemon thread.
-
-    Reliability priority:
-      1. Save raw transcript before calling OpenAI
-      2. On Whisper failure → move WAV to failed_audio/
-      3. On OpenAI failure → fallback markdown (handled inside formatter)
-    """
+    """Runs in a daemon thread — full lifecycle for one recording."""
     from whisper_note import config as cfg_mod
-    cfg = cfg_mod.get()
+    cfg     = cfg_mod.get()
     note_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     tmp_wav = None
 
     try:
-        # ── 1. Temporary WAV ──────────────────────────────────────────────────
         tmp_wav = storage.save_temp_wav(audio_np)
 
-        # ── 2. Transcribe ─────────────────────────────────────────────────────
         try:
             transcript = transcriber_mod.transcribe(tmp_wav)
         except Exception:
-            logger.error("Whisper transcription failed:")
-            logger.error(traceback.format_exc())
+            logger.error("Whisper transcription failed:\n" + traceback.format_exc())
             storage.save_failed_audio(tmp_wav, note_ts)
-            tmp_wav = None  # already moved
+            tmp_wav = None
             indicator.set_state("ERROR", reset_after=cfg.error_reset_seconds)
-            _notify("Transcription failed — audio saved to failed_audio/")
             return
 
         if not transcript.strip():
@@ -79,21 +69,15 @@ def _run_pipeline(audio_np) -> None:
             indicator.set_state("IDLE")
             return
 
-        # ── 3. Persist raw transcript (before AI call) ────────────────────────
         storage.save_raw_transcript(transcript, note_ts)
-
-        # ── 4. Format (fallback handled inside formatter) ─────────────────────
         markdown = format_transcript(transcript, note_ts)
-
-        # ── 5. Persist markdown ───────────────────────────────────────────────
         storage.save_markdown(markdown, note_ts)
 
         indicator.set_state("COMPLETED", reset_after=cfg.completed_reset_seconds)
         logger.info(f"Note {note_ts} complete.")
 
     except Exception:
-        logger.error("Unexpected pipeline error:")
-        logger.error(traceback.format_exc())
+        logger.error("Unexpected pipeline error:\n" + traceback.format_exc())
         indicator.set_state("ERROR", reset_after=cfg.error_reset_seconds)
     finally:
         if tmp_wav is not None:
@@ -136,21 +120,27 @@ def _stop_and_process() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Keyboard listener
+# Keyboard listener  —  Hold Ctrl+Alt+Space to record, release to process
 # ---------------------------------------------------------------------------
 
 def _on_press(key) -> None:
-    global _ctrl_held
+    global _ctrl_held, _alt_held
     if key in (kb.Key.ctrl_l, kb.Key.ctrl_r):
         _ctrl_held = True
-    elif key == kb.Key.space and _ctrl_held:
+    elif key in (kb.Key.alt_l, kb.Key.alt_r):
+        _alt_held = True
+    elif key == kb.Key.space and _ctrl_held and _alt_held:
         _start_recording()
 
 
 def _on_release(key):
-    global _ctrl_held
+    global _ctrl_held, _alt_held
     if key in (kb.Key.ctrl_l, kb.Key.ctrl_r):
         _ctrl_held = False
+        if recorder.is_active:
+            _stop_and_process()
+    elif key in (kb.Key.alt_l, kb.Key.alt_r):
+        _alt_held = False
         if recorder.is_active:
             _stop_and_process()
     elif key == kb.Key.space:
@@ -162,23 +152,6 @@ def _on_release(key):
         if not _GTK_AVAILABLE:
             os._exit(0)
         return False  # stops pynput listener
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _notify(message: str) -> None:
-    """Best-effort desktop notification — never raises."""
-    try:
-        import subprocess
-        subprocess.run(
-            ["notify-send", "whisper-note", message, "--urgency=critical"],
-            check=False,
-            timeout=5,
-        )
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -195,13 +168,12 @@ def main() -> None:
     logger.info(f"Log     : {SESSION_LOG}")
     logger.info(f"Notes   : {cfg.voice_notes_dir}")
     logger.info(f"Model   : {cfg.whisper_model}  ({cfg.whisper_compute_type})")
-    if not cfg.openai_api_key:
-        logger.warning("OPENAI_API_KEY not set — AI formatting disabled")
+    logger.info(f"LLM     : {cfg.llm_model}  →  {cfg.llm_url}")
 
     storage.ensure_directories()
     transcriber_mod.load_model()
 
-    logger.info("Ready — Hold Ctrl+Space to record | Release to process | Esc to quit")
+    logger.info("Ready — Hold Ctrl+Alt+Space to record | Release to process | Esc to quit")
     logger.info("=" * 60)
 
     listener = kb.Listener(on_press=_on_press, on_release=_on_release)

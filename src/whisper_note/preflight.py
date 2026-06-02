@@ -55,6 +55,8 @@ def run_checks(cfg: Config) -> None:
     warnings: list[str] = []
     passed:   list[str] = []
 
+    llm_errors: list[str] = []   # red but non-fatal — app still saves raw notes
+
     _check_python_version(errors)
     _check_required_packages(errors, passed)
     _check_gtk(warnings, passed)
@@ -62,12 +64,14 @@ def run_checks(cfg: Config) -> None:
     _check_whisper_model(cfg, errors, warnings, passed)
     _check_notes_dir(cfg, errors, passed)
     _check_log_dir(cfg, warnings, passed)
-    _check_openai_key(cfg, warnings)
+    _check_llm(cfg, llm_errors, passed)
 
     for msg in passed:
         print(f"  {_G}✓{_X}  {msg}")
     for msg in warnings:
         print(f"  {_Y}⚠{_X}  {msg}")
+    for msg in llm_errors:
+        print(f"  {_R}✗{_X}  {msg}")
     for msg in errors:
         print(f"  {_R}✗{_X}  {msg}")
 
@@ -80,8 +84,10 @@ def run_checks(cfg: Config) -> None:
         )
         sys.exit(1)
 
-    if warnings:
-        print(f"{_Y}Continuing with {len(warnings)} warning(s).{_X}\n")
+    non_fatal = warnings + llm_errors
+    if non_fatal:
+        note = "  (notes will be saved as raw transcripts without AI formatting)" if llm_errors else ""
+        print(f"{_Y}Continuing with {len(non_fatal)} warning(s).{_X}{note}\n")
     else:
         print(f"{_G}All checks passed.{_X}\n")
 
@@ -218,10 +224,45 @@ def _check_log_dir(cfg: Config, warnings: list[str], passed: list[str]) -> None:
         )
 
 
-def _check_openai_key(cfg: Config, warnings: list[str]) -> None:
-    if not cfg.openai_api_key:
-        warnings.append(
-            "OPENAI_API_KEY is not set — AI formatting is disabled.\n"
-            "     Notes will be saved using the raw transcript only.\n"
-            "     → export OPENAI_API_KEY=sk-..."
+def _check_llm(cfg: Config, llm_errors: list[str], passed: list[str]) -> None:
+    """
+    Verify the configured LLM endpoint is reachable and the key is accepted.
+    Uses client.models.list() — a lightweight GET with no token generation.
+    Non-fatal: app continues and saves raw transcripts if LLM is unavailable.
+    """
+    try:
+        import httpx
+        from openai import OpenAI, AuthenticationError, APIConnectionError
+
+        client = OpenAI(
+            base_url=cfg.llm_url,
+            api_key=cfg.llm_key,
+            max_retries=0,
+            default_headers={"anthropic-version": "2023-06-01"},
+            http_client=httpx.Client(
+                timeout=httpx.Timeout(connect=5.0, read=8.0, write=5.0, pool=5.0)
+            ),
+        )
+        client.models.list()
+        passed.append(
+            f"LLM ready: {cfg.llm_model}  →  {cfg.llm_url}"
+        )
+
+    except AuthenticationError:
+        llm_errors.append(
+            f"LLM authentication failed — key rejected by {cfg.llm_url}\n"
+            f"     Model : {cfg.llm_model}\n"
+            "     → Check WN_LLM_KEY is correct for this endpoint."
+        )
+    except APIConnectionError:
+        llm_errors.append(
+            f"LLM not reachable — cannot connect to {cfg.llm_url}\n"
+            f"     Model : {cfg.llm_model}\n"
+            "     → Is the server running?  Check WN_LLM_URL."
+        )
+    except Exception as exc:
+        llm_errors.append(
+            f"LLM check failed: {exc}\n"
+            f"     URL   : {cfg.llm_url}\n"
+            f"     Model : {cfg.llm_model}"
         )

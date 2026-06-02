@@ -1,101 +1,127 @@
 """
 whisper-note CLI entry point.
 
-Execution order:
-    1. Parse CLI args
-    2. Build Config from env vars, apply CLI overrides
-    3. Register the singleton (config.init)
-    4. Run preflight checks
-    5. Start the application
+Subcommands:
+  (none)           Start the application (default)
+  config show      Print current configuration
+  config set K=V   Update a config key and restart service
+  config restart   Restart the service
 """
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
+# Force pynput onto the X11/XRecord backend before it is imported anywhere.
+# On GNOME Wayland, WAYLAND_DISPLAY is set in the session environment and
+# pynput silently switches to its Wayland backend, which blocks global
+# hotkeys.  Unsetting it here makes pynput use XWayland where XRecord works.
+os.environ.pop("WAYLAND_DISPLAY", None)
+
 from whisper_note import __version__
 
+
+# ---------------------------------------------------------------------------
+# Parser
+# ---------------------------------------------------------------------------
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="whisper-note",
         description=(
             "Voice-to-markdown note taker.\n"
-            "Hold Ctrl+Space to record, release to transcribe and format.\n"
+            "Hold Ctrl+Alt+Space to record, release to transcribe and format.\n"
             "Press Esc to quit."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Environment variables (all optional — CLI flags take precedence):
-  VOICE_NOTES_DIR       Notes output directory           (default: ~/VoiceNotes)
-  WHISPER_MODEL         Model name or local path         (default: base)
-  WHISPER_COMPUTE_TYPE  Inference precision              (default: int8)
-  OPENAI_API_KEY        OpenAI API key for AI formatting
-  OPENAI_MODEL          OpenAI chat model                (default: gpt-4o-mini)
-  WHISPER_LOG_DIR       Log file directory               (default: ~/.local/share/whisper-note/logs)
-
-Whisper model names:
-  tiny | base | small | medium | large-v3
-  Named models are downloaded automatically on first use (~74 MB for base).
-  Use an absolute path to point to a local model instead.
+Config keys (edit with 'whisper-note config set KEY=VALUE'):
+  WHISPER_MODEL         Whisper model: tiny/base/small/medium/large-v3
+  WHISPER_COMPUTE_TYPE  Precision: int8 / float16 / float32
+  WN_LLM_URL           LLM API base URL
+  WN_LLM_KEY           LLM API key
+  WN_LLM_MODEL         LLM model name
+  WN_LLM_TIMEOUT       Request timeout in seconds
+  VOICE_NOTES_DIR       Notes output directory
 
 Examples:
   whisper-note
-  whisper-note --model small --notes-dir ~/Documents/notes
-  WHISPER_MODEL=large-v3 whisper-note
-  GDK_BACKEND=x11 whisper-note           # recommended on GNOME Wayland
+  whisper-note --model small
+  whisper-note config show
+  whisper-note config set WN_LLM_MODEL=gpt-4o-mini
+  whisper-note config set WN_LLM_URL=https://api.openai.com/v1
         """,
     )
 
-    parser.add_argument(
-        "--notes-dir",
-        metavar="DIR",
-        help="Directory to save notes (overrides VOICE_NOTES_DIR)",
-    )
-    parser.add_argument(
-        "--model",
-        metavar="MODEL",
-        help=(
-            "Whisper model name (tiny/base/small/medium/large-v3) or "
-            "absolute path to a local model directory (overrides WHISPER_MODEL)"
-        ),
-    )
-    parser.add_argument(
-        "--compute-type",
-        metavar="TYPE",
-        choices=["int8", "float16", "float32"],
-        help="Whisper inference precision — int8 / float16 / float32 (overrides WHISPER_COMPUTE_TYPE)",
-    )
-    parser.add_argument(
-        "--openai-model",
-        metavar="MODEL",
-        help="OpenAI chat model for formatting (overrides OPENAI_MODEL)",
-    )
-    parser.add_argument(
-        "--log-dir",
-        metavar="DIR",
-        help="Directory for session log files (overrides WHISPER_LOG_DIR)",
-    )
-    parser.add_argument(
-        "--skip-checks",
-        action="store_true",
-        help="Skip startup dependency checks (not recommended)",
-    )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"%(prog)s {__version__}",
-    )
+    sub = parser.add_subparsers(dest="command")
+
+    # ── config subcommand ────────────────────────────────────────────────────
+    cfg_p = sub.add_parser("config", help="View or change configuration")
+    cfg_sub = cfg_p.add_subparsers(dest="config_action")
+
+    cfg_sub.add_parser("show", help="Print current config")
+    cfg_sub.add_parser("restart", help="Restart the whisper-note service")
+
+    set_p = cfg_sub.add_parser("set", help="Set a config value  (KEY=VALUE)")
+    set_p.add_argument("assignment", metavar="KEY=VALUE",
+                       help="e.g. WN_LLM_MODEL=gpt-4o-mini")
+
+    # ── run flags ────────────────────────────────────────────────────────────
+    parser.add_argument("--notes-dir",    metavar="DIR")
+    parser.add_argument("--model",        metavar="MODEL")
+    parser.add_argument("--compute-type", metavar="TYPE",
+                        choices=["int8", "float16", "float32"])
+    parser.add_argument("--log-dir",      metavar="DIR")
+    parser.add_argument("--llm-model",    metavar="MODEL",
+                        help="LLM model (overrides WN_LLM_MODEL)")
+    parser.add_argument("--skip-checks",  action="store_true")
+    parser.add_argument("--version",      action="version",
+                        version=f"%(prog)s {__version__}")
 
     return parser
 
 
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
 def main() -> None:
     parser = _build_parser()
-    args = parser.parse_args()
+    args   = parser.parse_args()
 
-    # ── Build Config: env vars first, CLI flags override ─────────────────────
+    # ── config subcommand (no app startup needed) ─────────────────────────────
+    if args.command == "config":
+        from whisper_note.config_manager import show, set_key, restart_service
+
+        action = getattr(args, "config_action", None)
+
+        if action == "show":
+            show()
+
+        elif action == "set":
+            if "=" not in args.assignment:
+                print("Usage: whisper-note config set KEY=VALUE", file=sys.stderr)
+                sys.exit(1)
+            key, _, value = args.assignment.partition("=")
+            set_key(key.strip(), value.strip())
+            print(f"  Updated {key.strip()} = {value.strip()!r}")
+            print("  Restarting service…")
+            ok = restart_service()
+            if ok:
+                print("  Service restarted.")
+
+        elif action == "restart":
+            print("Restarting whisper-note service…")
+            restart_service()
+
+        else:
+            parser.parse_args(["config", "--help"])
+
+        return
+
+    # ── Normal app startup ────────────────────────────────────────────────────
     from whisper_note.config import Config, init as config_init
 
     cfg = Config()
@@ -106,18 +132,16 @@ def main() -> None:
         cfg.whisper_model = args.model
     if args.compute_type:
         cfg.whisper_compute_type = args.compute_type
-    if args.openai_model:
-        cfg.openai_model = args.openai_model
     if args.log_dir:
         cfg.log_dir = Path(args.log_dir).expanduser().resolve()
+    if args.llm_model:
+        cfg.llm_model = args.llm_model
 
     config_init(cfg)
 
-    # ── Preflight checks ─────────────────────────────────────────────────────
     if not args.skip_checks:
         from whisper_note.preflight import run_checks
         run_checks(cfg)
 
-    # ── Run ───────────────────────────────────────────────────────────────────
     from whisper_note.main import main as run_app
     run_app()

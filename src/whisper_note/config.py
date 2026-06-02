@@ -60,14 +60,21 @@ class Config:
     # ── Audio ─────────────────────────────────────────────────────────────────
     sample_rate: int = 16000
 
-    # ── OpenAI ───────────────────────────────────────────────────────────────
-    openai_api_key: str = field(
-        default_factory=lambda: os.environ.get("OPENAI_API_KEY", "")
+    # ── LLM formatter (OpenAI-compatible — works with Ollama, OpenAI, Claude) ──
+    # Switch provider by changing WN_LLM_URL + WN_LLM_KEY + WN_LLM_MODEL.
+    # No code changes needed — all three speak the same API.
+    llm_url: str = field(
+        default_factory=lambda: os.environ.get("WN_LLM_URL", "http://127.0.0.1:11434/v1")
     )
-    openai_model: str = field(
-        default_factory=lambda: os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    llm_key: str = field(
+        default_factory=lambda: os.environ.get("WN_LLM_KEY", "ollama")
     )
-    openai_timeout: int = 120  # seconds
+    llm_model: str = field(
+        default_factory=lambda: os.environ.get("WN_LLM_MODEL", "qwen3:4b")
+    )
+    llm_timeout: int = field(
+        default_factory=lambda: int(os.environ.get("WN_LLM_TIMEOUT", "300"))
+    )
 
     # ── Logging ───────────────────────────────────────────────────────────────
     log_dir: Path = field(default_factory=_default_log_dir)
