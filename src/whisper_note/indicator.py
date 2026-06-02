@@ -376,5 +376,5 @@ class StatusIndicator:
         self._window.move(geom.x + geom.width - w - 24, geom.y + 24)
 
     @staticmethod
-    def _sep() -> Gtk.Widget:
+    def _sep():
         return Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
